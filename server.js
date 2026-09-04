@@ -82,6 +82,36 @@ async function history(userId, characterId) {
   return (rows || []).map(x => ({ role: x.sender_type === 'user' ? 'user' : 'assistant', content: x.content }));
 }
 
+
+async function generateCharacters(userId, prefs = {}) {
+  const prompt = `Create 6 distinct fictional adult AI dating characters for a cozy realistic social/dating app. The user should discover them, not manually author them. Use these user preferences: ${JSON.stringify(prefs)}.
+Return ONLY valid JSON: {"characters":[...]}.
+Each character must have: name, age (adult 18+), gender, profile {bio, job}, personality {traits, communication, values, quirks}, background {life, goals, fears, secret}, preferences {likes, dislikes}, appearance {description}, current_mood {label}, current_activity {label}, opening_message.
+Make all 6 meaningfully different in personality, life, communication style, and appearance. Keep them fictional, human, realistic, warm, and suitable for a dating/social game. Do not make them controlling or possessive. Do not reference the prompt or say they are AI.`;
+  const raw = await gemini(prompt);
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch {
+    const m = raw.match(/\{[\s\S]*\}/);
+    if (!m) throw new Error('AI returned invalid character data');
+    parsed = JSON.parse(m[0]);
+  }
+  const list = Array.isArray(parsed?.characters) ? parsed.characters.slice(0, 6) : [];
+  if (!list.length) throw new Error('AI did not generate characters');
+  const rows = list.map(c => ({
+    owner_id: userId,
+    name: String(c.name || 'Một người mới').slice(0, 80),
+    profile: { ...(c.profile || {}), age: Number(c.age) || 18, gender: c.gender || '', opening_message: c.opening_message || '' },
+    personality: c.personality || {},
+    background: c.background || {},
+    preferences: c.preferences || {},
+    appearance: c.appearance || {},
+    status: 'active',
+    current_mood: c.current_mood || { label: 'bình yên' },
+    current_activity: c.current_activity || { label: 'đang sống một ngày bình thường' }
+  }));
+  return await sb('/rest/v1/characters', { method:'POST', headers:{'Content-Type':'application/json',Prefer:'return=representation'}, body:JSON.stringify(rows) }, true);
+}
+
 const fs = require('fs');
 const path = require('path');
 const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
@@ -121,6 +151,17 @@ async function route(req, res) {
     } catch (e) {
       return send(res, e.status || 500, { error: e.message || 'Không thể tạo nhân vật.' });
     }
+  }
+  if (req.method === 'POST' && url.pathname === '/api/characters/generate') {
+    try {
+      const u = await currentUser(req.headers.authorization?.replace(/^Bearer\s+/i, ''));
+      if (!u) return send(res, 401, { error: 'Unauthorized' });
+      const b = await parseBody(req);
+      const existing = await sb(`/rest/v1/characters?owner_id=eq.${encodeURIComponent(u.id)}&select=id&limit=1`, { headers:{Accept:'application/json'} }, true);
+      if (existing?.length) return send(res, 200, { characters: await characters(), generated: false });
+      const created = await generateCharacters(u.id, b.preferences || {});
+      return send(res, 201, { characters: created || [], generated: true });
+    } catch(e) { return send(res, e.status || 500, { error: e.message || 'Không thể tạo nhân vật bằng AI.' }); }
   }
   if (req.method === 'GET' && url.pathname === '/api/characters') { try { const u = await currentUser(req.headers.authorization?.replace(/^Bearer\s+/i,'')); if (!u) return send(res, 401, { error:'Unauthorized' }); return send(res,200,{characters:await characters()}); } catch(e){return send(res,e.status||500,{error:e.message})} }
   if (req.method === 'POST' && url.pathname === '/api/chat/history') { try { const u=await currentUser(req.headers.authorization?.replace(/^Bearer\s+/i,'')); if(!u)return send(res,401,{error:'Unauthorized'}); const b=await parseBody(req); return send(res,200,{messages:await history(u.id,b.character_id)}); }catch(e){return send(res,e.status||500,{error:e.message})} }
