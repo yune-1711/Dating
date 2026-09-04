@@ -89,7 +89,7 @@ const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 
 async function route(req, res) {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-  const pathname = decodeURIComponent(pathname).replace(/\/+$/, '') || '/';
+  const pathname = decodeURIComponent(url.pathname).replace(/\/+$/, '') || '/';
   console.log(`[request] ${req.method} ${pathname}`);
 
   // Keep diagnostics before all other API routes. These endpoints do not expose secrets.
