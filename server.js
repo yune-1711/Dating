@@ -94,6 +94,34 @@ async function route(req, res) {
   if (req.method === 'POST' && /^\/api\/auth\/(signup|signin)$/.test(url.pathname)) {
     try { const b = await parseBody(req); if (!b.email || !b.password) return send(res, 400, { error: 'Email và mật khẩu là bắt buộc.' }); const action = url.pathname.endsWith('signup') ? 'signup' : 'token?grant_type=password'; const data = await sb(`/auth/v1/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: b.email, password: b.password }) }); return send(res, 200, { access_token: data.access_token, refresh_token: data.refresh_token, user: data.user }); } catch(e) { return send(res, e.status || 500, { error: e.message }); }
   }
+  if (req.method === 'POST' && url.pathname === '/api/characters') {
+    try {
+      const u = await currentUser(req.headers.authorization?.replace(/^Bearer\s+/i, ''));
+      if (!u) return send(res, 401, { error: 'Unauthorized' });
+      const b = await parseBody(req);
+      if (!b.name || !String(b.name).trim()) return send(res, 400, { error: 'Tên nhân vật là bắt buộc.' });
+      const character = {
+        owner_id: u.id,
+        name: String(b.name).trim(),
+        profile: b.profile || {},
+        personality: b.personality || {},
+        background: b.background || {},
+        preferences: b.preferences || {},
+        appearance: b.appearance || {},
+        status: 'active',
+        current_mood: b.current_mood || { label: 'bình yên' },
+        current_activity: b.current_activity || { label: 'đang rảnh' }
+      };
+      const created = await sb('/rest/v1/characters', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
+        body: JSON.stringify(character)
+      }, true);
+      return send(res, 201, { character: created?.[0] || null });
+    } catch (e) {
+      return send(res, e.status || 500, { error: e.message || 'Không thể tạo nhân vật.' });
+    }
+  }
   if (req.method === 'GET' && url.pathname === '/api/characters') { try { const u = await currentUser(req.headers.authorization?.replace(/^Bearer\s+/i,'')); if (!u) return send(res, 401, { error:'Unauthorized' }); return send(res,200,{characters:await characters()}); } catch(e){return send(res,e.status||500,{error:e.message})} }
   if (req.method === 'POST' && url.pathname === '/api/chat/history') { try { const u=await currentUser(req.headers.authorization?.replace(/^Bearer\s+/i,'')); if(!u)return send(res,401,{error:'Unauthorized'}); const b=await parseBody(req); return send(res,200,{messages:await history(u.id,b.character_id)}); }catch(e){return send(res,e.status||500,{error:e.message})} }
   if (req.method === 'POST' && url.pathname === '/api/chat') { try { const u=await currentUser(req.headers.authorization?.replace(/^Bearer\s+/i,'')); if(!u)return send(res,401,{error:'Unauthorized'}); const b=await parseBody(req); if(!b.message)return send(res,400,{error:'Message is required'}); const cs=await characters(); const c=cs.find(x=>x.id===b.character_id); if(!c)return send(res,404,{error:'Character not found'}); const h=await history(u.id,c.id); const context=`Character: ${c.name}. Profile: ${JSON.stringify(c.profile||{})}. Personality: ${JSON.stringify(c.personality||{})}. Current mood: ${c.current_mood||'calm'}. Current activity: ${c.current_activity||'free time'}. User message: ${b.message}`; const reply=await gemini(context,h); await saveMessage(u.id,c.id,'user',b.message); await saveMessage(u.id,c.id,'assistant',reply); return send(res,200,{reply}); }catch(e){return send(res,e.status||500,{error:e.message})} }
