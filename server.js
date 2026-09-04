@@ -88,13 +88,30 @@ const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 
 
 async function route(req, res) {
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  if (req.method === 'GET' && url.pathname === '/api/health') return send(res, 200, { ok: true, service: 'cozy-dating', version: '33.1.0' });
-  if (req.method === 'GET' && url.pathname === '/api/config-status') return send(res, 200, { supabase: !!SUPABASE_URL && !!SUPABASE_PUBLISHABLE_KEY && !!SUPABASE_SECRET_KEY, gemini: !!GEMINI_API_KEY, model: GEMINI_MODEL });
-  if (req.method === 'POST' && /^\/api\/auth\/(signup|signin)$/.test(url.pathname)) {
-    try { const b = await parseBody(req); if (!b.email || !b.password) return send(res, 400, { error: 'Email và mật khẩu là bắt buộc.' }); const action = url.pathname.endsWith('signup') ? 'signup' : 'token?grant_type=password'; const data = await sb(`/auth/v1/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: b.email, password: b.password }) }); return send(res, 200, { access_token: data.access_token, refresh_token: data.refresh_token, user: data.user }); } catch(e) { return send(res, e.status || 500, { error: e.message }); }
+  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  const pathname = decodeURIComponent(pathname).replace(/\/+$/, '') || '/';
+  console.log(`[request] ${req.method} ${pathname}`);
+
+  // Keep diagnostics before all other API routes. These endpoints do not expose secrets.
+  if (req.method === 'GET' && (pathname === '/api/health' || pathname === '/health')) {
+    return send(res, 200, { ok: true, service: 'cozy-dating', version: '34.1.0', path: pathname });
   }
-  if (req.method === 'POST' && url.pathname === '/api/characters') {
+  if (req.method === 'GET' && pathname === '/api/config-status') {
+    return send(res, 200, {
+      ok: true,
+      supabase: !!SUPABASE_URL && !!SUPABASE_PUBLISHABLE_KEY && !!SUPABASE_SECRET_KEY,
+      gemini: !!GEMINI_API_KEY,
+      model: GEMINI_MODEL,
+      node: process.version
+    });
+  }
+  if (req.method === 'GET' && pathname === '/api/debug') {
+    return send(res, 200, { ok: true, method: req.method, pathname, host: req.headers.host || null });
+  }
+  if (req.method === 'POST' && /^\/api\/auth\/(signup|signin)$/.test(pathname)) {
+    try { const b = await parseBody(req); if (!b.email || !b.password) return send(res, 400, { error: 'Email và mật khẩu là bắt buộc.' }); const action = pathname.endsWith('signup') ? 'signup' : 'token?grant_type=password'; const data = await sb(`/auth/v1/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: b.email, password: b.password }) }); return send(res, 200, { access_token: data.access_token, refresh_token: data.refresh_token, user: data.user }); } catch(e) { return send(res, e.status || 500, { error: e.message }); }
+  }
+  if (req.method === 'POST' && pathname === '/api/characters') {
     try {
       const u = await currentUser(req.headers.authorization?.replace(/^Bearer\s+/i, ''));
       if (!u) return send(res, 401, { error: 'Unauthorized' });
@@ -122,11 +139,16 @@ async function route(req, res) {
       return send(res, e.status || 500, { error: e.message || 'Không thể tạo nhân vật.' });
     }
   }
-  if (req.method === 'GET' && url.pathname === '/api/characters') { try { const u = await currentUser(req.headers.authorization?.replace(/^Bearer\s+/i,'')); if (!u) return send(res, 401, { error:'Unauthorized' }); return send(res,200,{characters:await characters()}); } catch(e){return send(res,e.status||500,{error:e.message})} }
-  if (req.method === 'POST' && url.pathname === '/api/chat/history') { try { const u=await currentUser(req.headers.authorization?.replace(/^Bearer\s+/i,'')); if(!u)return send(res,401,{error:'Unauthorized'}); const b=await parseBody(req); return send(res,200,{messages:await history(u.id,b.character_id)}); }catch(e){return send(res,e.status||500,{error:e.message})} }
-  if (req.method === 'POST' && url.pathname === '/api/chat') { try { const u=await currentUser(req.headers.authorization?.replace(/^Bearer\s+/i,'')); if(!u)return send(res,401,{error:'Unauthorized'}); const b=await parseBody(req); if(!b.message)return send(res,400,{error:'Message is required'}); const cs=await characters(); const c=cs.find(x=>x.id===b.character_id); if(!c)return send(res,404,{error:'Character not found'}); const h=await history(u.id,c.id); const context=`Character: ${c.name}. Profile: ${JSON.stringify(c.profile||{})}. Personality: ${JSON.stringify(c.personality||{})}. Current mood: ${c.current_mood||'calm'}. Current activity: ${c.current_activity||'free time'}. User message: ${b.message}`; const reply=await gemini(context,h); await saveMessage(u.id,c.id,'user',b.message); await saveMessage(u.id,c.id,'assistant',reply); return send(res,200,{reply}); }catch(e){return send(res,e.status||500,{error:e.message})} }
+  if (req.method === 'GET' && pathname === '/api/characters') { try { const u = await currentUser(req.headers.authorization?.replace(/^Bearer\s+/i,'')); if (!u) return send(res, 401, { error:'Unauthorized' }); return send(res,200,{characters:await characters()}); } catch(e){return send(res,e.status||500,{error:e.message})} }
+  if (req.method === 'POST' && pathname === '/api/chat/history') { try { const u=await currentUser(req.headers.authorization?.replace(/^Bearer\s+/i,'')); if(!u)return send(res,401,{error:'Unauthorized'}); const b=await parseBody(req); return send(res,200,{messages:await history(u.id,b.character_id)}); }catch(e){return send(res,e.status||500,{error:e.message})} }
+  if (req.method === 'POST' && pathname === '/api/chat') { try { const u=await currentUser(req.headers.authorization?.replace(/^Bearer\s+/i,'')); if(!u)return send(res,401,{error:'Unauthorized'}); const b=await parseBody(req); if(!b.message)return send(res,400,{error:'Message is required'}); const cs=await characters(); const c=cs.find(x=>x.id===b.character_id); if(!c)return send(res,404,{error:'Character not found'}); const h=await history(u.id,c.id); const context=`Character: ${c.name}. Profile: ${JSON.stringify(c.profile||{})}. Personality: ${JSON.stringify(c.personality||{})}. Current mood: ${c.current_mood||'calm'}. Current activity: ${c.current_activity||'free time'}. User message: ${b.message}`; const reply=await gemini(context,h); await saveMessage(u.id,c.id,'user',b.message); await saveMessage(u.id,c.id,'assistant',reply); return send(res,200,{reply}); }catch(e){return send(res,e.status||500,{error:e.message})} }
   if (req.method === 'GET') { res.writeHead(200, {'Content-Type':'text/html; charset=utf-8'}); return res.end(html); }
+  if (pathname.startsWith('/api')) return send(res,404,{error:'API route not found', method:req.method, path:pathname});
   send(res,404,{error:'Not found'});
 }
 
-http.createServer((req,res)=>route(req,res).catch(e=>send(res,500,{error:e.message||'Server error'}))).listen(PORT,'0.0.0.0',()=>console.log(`CozyDating listening on ${PORT}`));
+http.createServer((req,res)=>route(req,res).catch(e=>{
+  console.error('[request-error]', e);
+  if (!res.headersSent) send(res,500,{error:e.message||'Server error'});
+  else res.end();
+})).listen(PORT,'0.0.0.0',()=>console.log(`CozyDating 34.1 listening on 0.0.0.0:${PORT}`));
